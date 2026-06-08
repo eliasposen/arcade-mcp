@@ -35,6 +35,7 @@ from pctx_code_mode.params import (
     UpdateTaskResult,
 )
 from pctx_code_mode.store import (
+    _now,
     get_store,
 )
 
@@ -233,7 +234,6 @@ def activate_sprint(
             f"Sprint is already '{sprint['status']}', must be 'planning' to activate"
         )
     sprint["status"] = "active"
-    from pctx_code_mode.store import _now
 
     sprint["updated_at"] = _now()
     return sprint
@@ -842,4 +842,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import os
+
+    transport = (
+        sys.argv[1] if len(sys.argv) > 1 else os.environ.get("ARCADE_SERVER_TRANSPORT", "stdio")
+    )
+    host = os.environ.get("ARCADE_SERVER_HOST", "127.0.0.1")
+    port = int(os.environ.get("ARCADE_SERVER_PORT", "8000"))
+    app.run(transport=transport, host=host, port=port)

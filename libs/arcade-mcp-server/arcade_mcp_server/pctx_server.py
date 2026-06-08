@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Any
 
-from pctx_client import AsyncTool, Pctx
+from pctx_client import AsyncTool, Pctx, Tool
 from pctx_client import tool as pctx_tool
 from pctx_client.descriptions import get_tool_description
 from pctx_client.models import (
@@ -27,6 +27,7 @@ from pctx_client.models import (
     ToolName,
 )
 
+from arcade_mcp_server import CreateTaskResult
 from arcade_mcp_server.server import MCPServer
 from arcade_mcp_server.session import ServerSession
 from arcade_mcp_server.types import (
@@ -110,7 +111,7 @@ class PctxMCPServer(MCPServer):
 
     async def _build_pctx_tools(
         self, req_id: RequestId, session: ServerSession | None
-    ) -> list[AsyncTool]:
+    ) -> list[AsyncTool | Tool]:
         """Wrap each Arcade catalog tool as a pctx ``AsyncTool``.
 
         Each returned tool, when invoked by the pctx runtime, dispatches back
@@ -126,7 +127,7 @@ class PctxMCPServer(MCPServer):
         """
         arcade_tools = await self._tool_manager.list_tools()
 
-        pctx_tools: list[AsyncTool] = []
+        pctx_tools: list[AsyncTool | Tool] = []
         for t in arcade_tools:
             # Arcade tool names are exposed as `<server_name>_<tool_name>`
             split_name = t.name.split("_", maxsplit=1)
@@ -154,22 +155,32 @@ class PctxMCPServer(MCPServer):
                     raise RuntimeError(  # noqa: TRY004
                         f"Tool call {_internal_arcade_tool_name!r} failed: {response.error}"
                     )
+                elif isinstance(response.result, CreateTaskResult):
+                    raise RuntimeError(  # noqa: TRY004
+                        f"Tool call {_internal_arcade_tool_name!r} created task (not supported): {response.result.task}"
+                    )
+                elif isinstance(response.result, CallToolResult):
+                    result = response.result
+                    if result.isError:
+                        raise RuntimeError(
+                            f"Tool call {_internal_arcade_tool_name!r} failed: {result}"
+                        )
 
-                result = response.result
-                if result.isError:
-                    raise RuntimeError(f"Tool call {_internal_arcade_tool_name!r} failed: {result}")
-
-                # Prefer structuredContent; otherwise try to JSON-parse the first
-                # text content (string fallback); otherwise return the raw content list.
-                if result.structuredContent is not None:
-                    return result.structuredContent
-                first = result.content[0] if result.content else None
-                if isinstance(first, TextContent):
-                    try:
-                        return json.loads(first.text)
-                    except json.JSONDecodeError:
-                        return first.text
-                return [c.model_dump(mode="json") for c in result.content]
+                    # Prefer structuredContent; otherwise try to JSON-parse the first
+                    # text content (string fallback); otherwise return the raw content list.
+                    if result.structuredContent is not None:
+                        return result.structuredContent
+                    first = result.content[0] if result.content else None
+                    if isinstance(first, TextContent):
+                        try:
+                            return json.loads(first.text)
+                        except json.JSONDecodeError:
+                            return first.text
+                    return [c.model_dump(mode="json") for c in result.content]
+                else:
+                    raise RuntimeError(  # noqa: TRY004
+                        f"Unexpected invoke tool response {_internal_arcade_tool_name!r}: {response}"
+                    )
 
             pctx_tools.append(_invoke_tool)
         return pctx_tools
@@ -217,7 +228,7 @@ class PctxMCPServer(MCPServer):
         return JSONRPCResponse(
             id=message.id,
             result=CallToolResult(
-                content=[TextContent(type="text", text=out, meta=meta)],
+                content=[TextContent(type="text", text=out, _meta=meta)],
                 structuredContent=None,
                 isError=False,
             ),
